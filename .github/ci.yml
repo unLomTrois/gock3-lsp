@@ -1,0 +1,56 @@
+# This workflow will build and test the gock3-lsp project
+# Triggered on pushes and pull requests to the master branch
+
+name: CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'  # Specify your Go version
+
+      # Step 3: Cache Go modules to speed up builds
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: go mod tidy
+
+      # Step 5: Build the project for the current platform
+      - name: Build
+        run: make build
+
+      # Step 6: Run tests
+      - name: Test
+        run: make test
+
+      # Step 7: Lint the code
+      - name: Lint
+        run: make lint
+
+      # Step 8: Format the code
+      - name: Format
+        run: make fmt
