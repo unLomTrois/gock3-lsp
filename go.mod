@@ -1,6 +1,6 @@
 module github.com/unLomTrois/gock3-lsp
 
-go 1.23.1
+go 1.23
 
 require (
 	github.com/creachadair/jrpc2 v1.2.1 // indirect
