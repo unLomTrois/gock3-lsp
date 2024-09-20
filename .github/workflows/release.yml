@@ -1,15 +1,10 @@
-# This workflow builds gock3-lsp for multiple platforms and creates a GitHub release with the binaries.
-
-name: Release
+name: Build and Release gock3-lsp
 
 on:
-  # Trigger the workflow manually via the GitHub Actions tab
-  workflow_dispatch:
-
-  # Optionally, trigger on push to master with a specific commit message or tag
   push:
     tags:
       - 'v*.*.*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   build-and-release:
@@ -24,11 +19,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'  # Specify your Go version
+          go-version: '1.20'
 
-      # Step 3: Cache Go modules to speed up builds
+      # Step 3: Cache Go modules
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: |
             ~/go/pkg/mod
@@ -41,45 +36,17 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
 
-      # Step 5: Build binaries for all supported platforms
+      # Step 5: Build binaries for all platforms
       - name: Build binaries for all platforms
         run: make build-all
 
-      # Step 6: Create a GitHub Release
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+      # Step 6: Upload release assets using softprops/action-gh-release
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./bin/gock3-lsp-linux
+            ./bin/gock3-lsp-darwin
+            ./bin/gock3-lsp-windows.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: "gock3-lsp ${{ github.ref_name }}"
-          draft: false
-          prerelease: false
-
-      # Step 7: Upload Linux Binary to Release
-      - name: Upload Linux Binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/gock3-lsp-linux
-          asset_name: gock3-lsp-linux
-          asset_content_type: application/octet-stream
-
-      # Step 8: Upload macOS Binary to Release
-      - name: Upload macOS Binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/gock3-lsp-darwin
-          asset_name: gock3-lsp-darwin
-          asset_content_type: application/octet-stream
-
-      # Step 9: Upload Windows Binary to Release
-      - name: Upload Windows Binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/gock3-lsp-windows.exe
-          asset_name: gock3-lsp-windows.exe
-          asset_content_type: application/octet-stream
