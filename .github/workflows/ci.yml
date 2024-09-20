@@ -49,7 +49,7 @@ jobs:
 
       # Step 7: Lint the code
       - name: Lint
-        run: make lint
+        uses: golangci/golangci-lint-action@v6.1.0
 
       # Step 8: Format the code
       - name: Format
