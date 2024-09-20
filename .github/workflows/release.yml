@@ -39,7 +39,15 @@ jobs:
       # Step 5: Build binaries for all platforms
       - name: Build binaries for all platforms
         run: make build-all
-
+      - name: Tag the repository
+        id: tag
+        run: |
+          # See https://docs.github.com/en/get-started/using-git/dealing-with-special-characters-in-branch-and-tag-names
+          TAG=v$(date -Iseconds | sed 's/[T:\+]/-/g')
+          echo "$TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          git tag -a $TAG -m "Published version $TAG" ${GITHUB_SHA}
+          git push origin $TAG
       # Step 6: Upload release assets using softprops/action-gh-release
       - name: Upload Release
         uses: softprops/action-gh-release@v2
