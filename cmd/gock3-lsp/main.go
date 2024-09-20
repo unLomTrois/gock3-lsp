@@ -34,10 +34,11 @@ func TextDocumentCompletion(ctx context.Context, params lsp.CompletionParams) (l
 		IsIncomplete: false,
 		Items: []lsp.CompletionItem{
 			{
-				Label:         "Hello",
-				Detail:        "Some documentation",
-				Documentation: "More documentation",
-				Kind:          lsp.CIKMethod,
+				Label:         "namespace",
+				Data:          1,
+				Kind:          lsp.CIKText,
+				Detail:        "namespace of events",
+				Documentation: "https://ck3.paradoxwikis.com/Event_modding",
 			},
 		},
 	}, nil
