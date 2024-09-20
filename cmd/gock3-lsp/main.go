@@ -32,7 +32,14 @@ func Initialize(ctx context.Context, params lsp.InitializeParams) (lsp.Initializ
 func TextDocumentCompletion(ctx context.Context, params lsp.CompletionParams) (lsp.CompletionList, error) {
 	return lsp.CompletionList{
 		IsIncomplete: false,
-		Items:        []lsp.CompletionItem{},
+		Items: []lsp.CompletionItem{
+			{
+				Label:         "Hello",
+				Detail:        "Some documentation",
+				Documentation: "More documentation",
+				Kind:          lsp.CIKMethod,
+			},
+		},
 	}, nil
 }
 
