@@ -50,7 +50,6 @@ jobs:
       # Step 6: Upload release assets using softprops/action-gh-release
       - name: Upload Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
             ./bin/gock3-lsp-linux
