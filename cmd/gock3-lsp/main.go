@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/creachadair/jrpc2"
 	"github.com/creachadair/jrpc2/channel"
@@ -12,17 +14,49 @@ import (
 	lsp "github.com/sourcegraph/go-lsp"
 )
 
-func Initialize(ctx context.Context, params lsp.InitializeParams) (lsp.InitializeResult, error) {
+// Server encapsulates the state and handlers for the language server.
+type Server struct {
+	jrpcServer *jrpc2.Server
+	mutex      sync.RWMutex
+	DiagFiles  map[string][]lsp.Diagnostic
+	Documents  map[string]string
+}
+
+// NewServer initializes a new Server instance with handlers.
+func NewServer() *Server {
+	s := &Server{
+		DiagFiles: make(map[string][]lsp.Diagnostic),
+		Documents: make(map[string]string),
+	}
+
+	handlers := handler.Map{
+		"initialize":              handler.New(s.Initialize),
+		"textDocument/completion": handler.New(s.TextDocumentCompletion),
+		"textDocument/didOpen":    handler.New(s.TextDocumentDidOpen),
+		"textDocument/didClose":   handler.New(s.TextDocumentDidClose),
+		"textDocument/didChange":  handler.New(s.TextDocumentDidChange),
+		"textDocument/hover":      handler.New(s.TextDocumentHover),
+	}
+
+	s.jrpcServer = jrpc2.NewServer(handlers, nil)
+	return s
+}
+
+// Initialize handles the LSP initialize request.
+func (s *Server) Initialize(ctx context.Context, params lsp.InitializeParams) (lsp.InitializeResult, error) {
+	// No shared resources are accessed here, so no mutex is needed.
 	capabilities := lsp.ServerCapabilities{
 		TextDocumentSync: &lsp.TextDocumentSyncOptionsOrKind{
 			Options: &lsp.TextDocumentSyncOptions{
 				OpenClose: true,
-				Change:    1,
-			}},
+				Change:    lsp.TDSKIncremental,
+			},
+		},
 		CompletionProvider: &lsp.CompletionOptions{
 			ResolveProvider:   false,
 			TriggerCharacters: []string{"."},
 		},
+		HoverProvider: true,
 	}
 
 	return lsp.InitializeResult{
@@ -30,115 +64,221 @@ func Initialize(ctx context.Context, params lsp.InitializeParams) (lsp.Initializ
 	}, nil
 }
 
-func TextDocumentCompletion(ctx context.Context, params lsp.CompletionParams) (lsp.CompletionList, error) {
+// TextDocumentCompletion provides completion items.
+func (s *Server) TextDocumentCompletion(ctx context.Context, params lsp.CompletionParams) (lsp.CompletionList, error) {
+	// No shared resources are accessed here, so no mutex is needed.
+	// Example completion item; extend as needed.
+	items := []lsp.CompletionItem{
+		{
+			Label:         "namespace",
+			Kind:          lsp.CIKText,
+			Detail:        "Namespace of events",
+			Documentation: "https://ck3.paradoxwikis.com/Event_modding",
+		},
+	}
+
 	return lsp.CompletionList{
 		IsIncomplete: false,
-		Items: []lsp.CompletionItem{
-			{
-				Label:         "namespace",
-				Data:          1,
-				Kind:          lsp.CIKText,
-				Detail:        "namespace of events",
-				Documentation: "https://ck3.paradoxwikis.com/Event_modding",
-			},
-		},
+		Items:        items,
 	}, nil
 }
 
-var tempFile *os.File
-var DiagsFiles = make(map[string][]lsp.Diagnostic)
-var Server *jrpc2.Server
+// TextDocumentDidOpen handles the event when a text document is opened.
+func (s *Server) TextDocumentDidOpen(ctx context.Context, params lsp.DidOpenTextDocumentParams) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
-func TextDocumentDidOpen(ctx context.Context, vs lsp.DidOpenTextDocumentParams) error {
-	fileURL := strings.Replace(string(vs.TextDocument.URI), "file://", "", 1)
-	DiagsFiles[fileURL] = GetDiagnostics(fileURL, fileURL)
+	uri := params.TextDocument.URI
+	filePath, err := uriToFilePath(uri)
+	if err != nil {
+		log.Printf("Invalid URI '%s': %v", uri, err)
+		return err
+	}
 
-	TextDocumentPublishDiagnostics(Server, ctx, lsp.PublishDiagnosticsParams{
-		URI:         vs.TextDocument.URI,
-		Diagnostics: DiagsFiles[fileURL],
-	})
-	tempFile.Write([]byte(vs.TextDocument.Text))
+	// Store the document content in memory.
+	s.Documents[filePath] = params.TextDocument.Text
+
+	// Get diagnostics for the opened file.
+	diagnostics := s.GetDiagnostics(filePath)
+	s.DiagFiles[filePath] = diagnostics
+
+	// Publish diagnostics to the client.
+	return s.publishDiagnostics(ctx, uri, diagnostics)
+}
+
+// TextDocumentDidChange handles the event when a text document is changed.
+func (s *Server) TextDocumentDidChange(ctx context.Context, params lsp.DidChangeTextDocumentParams) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	uri := params.TextDocument.URI
+	filePath, err := uriToFilePath(uri)
+	if err != nil {
+		log.Printf("Invalid URI '%s': %v", uri, err)
+		return err
+	}
+
+	// Apply changes to the document content in memory.
+	if len(params.ContentChanges) == 0 {
+		return nil // No changes to apply.
+	}
+
+	change := params.ContentChanges[0]
+	s.Documents[filePath] = change.Text
+
+	// Get updated diagnostics.
+	diagnostics := s.GetDiagnostics(filePath)
+	s.DiagFiles[filePath] = diagnostics
+
+	// Publish updated diagnostics.
+	return s.publishDiagnostics(ctx, uri, diagnostics)
+}
+
+// TextDocumentDidClose handles the event when a text document is closed.
+func (s *Server) TextDocumentDidClose(ctx context.Context, params lsp.DidCloseTextDocumentParams) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	uri := params.TextDocument.URI
+	filePath, err := uriToFilePath(uri)
+	if err != nil {
+		log.Printf("Invalid URI '%s': %v", uri, err)
+		return err
+	}
+
+	// Remove diagnostics and document content.
+	delete(s.DiagFiles, filePath)
+	delete(s.Documents, filePath)
+
 	return nil
 }
 
-func TextDocumentPublishDiagnostics(server *jrpc2.Server, ctx context.Context, vs lsp.PublishDiagnosticsParams) error {
-	return nil
-	// return server.Notify(ctx, "textDocument/publishDiagnostics", vs)
-}
+// TextDocumentHover provides hover information at a given position.
+func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentPositionParams) (lsp.Hover, error) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 
-func GetDiagnostics(fileURL string, file string) []lsp.Diagnostic {
-	var diags []lsp.Diagnostic
-	return diags
-}
+	uri := params.TextDocument.URI
+	filePath, err := uriToFilePath(uri)
+	if err != nil {
+		log.Printf("Invalid URI '%s': %v", uri, err)
+		return lsp.Hover{}, err
+	}
 
-func TextDocumentDidChange(ctx context.Context, vs lsp.DidChangeTextDocumentParams) error {
-	tempFile.Truncate(0)
-	tempFile.Seek(0, 0)
-	tempFile.Write([]byte(vs.ContentChanges[0].Text))
+	content, exists := s.Documents[filePath]
+	if !exists {
+		errMsg := "Document does not exist for URI: " + string(uri)
+		log.Println(errMsg)
+		return lsp.Hover{}, errors.New(errMsg)
+	}
 
-	fileURL := strings.Replace(string(vs.TextDocument.URI), "file://", "", 1)
-	DiagsFiles[fileURL] = GetDiagnostics(tempFile.Name(), fileURL)
-	TextDocumentPublishDiagnostics(Server, ctx, lsp.PublishDiagnosticsParams{
-		URI:         vs.TextDocument.URI,
-		Diagnostics: DiagsFiles[fileURL],
-	})
-	return nil
-}
+	// Get the specific line.
+	lines := strings.Split(content, "\n")
+	if params.Position.Line >= len(lines) {
+		return lsp.Hover{}, nil // Line out of range.
+	}
+	lineContent := lines[params.Position.Line]
 
-func TextDocumentDidClose(ctx context.Context, vs lsp.DidCloseTextDocumentParams) error {
-	return nil
-}
+	// Extract the word at the given character position.
+	word, err := extractWord(lineContent, params.Position.Character)
+	if err != nil {
+		return lsp.Hover{}, nil // No word found.
+	}
 
-func TextDocumentHover(ctx context.Context, vs lsp.TextDocumentPositionParams) (lsp.Hover, error) {
-	pos := vs.Position
-	character := pos.Character
-	line := pos.Line
+	// Example hover information; extend as needed.
+	hoverContent := "Information about: " + word
 
-	// read temp file
-	tempFile.Seek(0, 0)
-	contents := make([]byte, 0)
-	tempFile.Read(contents)
-	contents = contents[:len(contents)-1]
-
-	// now get it by pos line
-	// get the line
-	lineContents := strings.Split(string(contents), "\n")[line]
-	// get the character
-	characterContents := strings.Split(lineContents, " ")[character:3]
-
-	rang := &lsp.Range{
-		Start: lsp.Position{Line: line, Character: character},
+	// Define the range for the hover.
+	hoverRange := &lsp.Range{
+		Start: lsp.Position{
+			Line:      params.Position.Line,
+			Character: params.Position.Character - len(word),
+		},
 		End: lsp.Position{
-			Line:      line,
-			Character: character + 1,
+			Line:      params.Position.Line,
+			Character: params.Position.Character,
 		},
 	}
 
 	return lsp.Hover{
 		Contents: []lsp.MarkedString{{
 			Language: "plaintext",
-			Value:    strings.Join(characterContents, " "),
+			Value:    hoverContent,
 		}},
-		Range: rang,
+		Range: hoverRange,
 	}, nil
 }
 
-func main() {
-	handlers := handler.Map{
-		"initialize":              handler.New(Initialize),
-		"textDocument/completion": handler.New(TextDocumentCompletion),
-		"textDocument/didOpen":    handler.New(TextDocumentDidOpen),
-		"textDocument/didClose":   handler.New(TextDocumentDidClose),
-		"textDocument/didChange":  handler.New(TextDocumentDidChange),
+// Start runs the language server.
+func (s *Server) Start() error {
+	s.jrpcServer.Start(channel.Header("")(os.Stdin, os.Stdout))
+	return s.jrpcServer.Wait()
+}
 
-		"textDocument/hover": handler.New(TextDocumentHover),
+// publishDiagnostics sends diagnostics to the client.
+func (s *Server) publishDiagnostics(ctx context.Context, uri lsp.DocumentURI, diagnostics []lsp.Diagnostic) error {
+	// No shared resources are accessed here, so no mutex is needed.
+	params := lsp.PublishDiagnosticsParams{
+		URI:         uri,
+		Diagnostics: diagnostics,
+	}
+	if err := s.jrpcServer.Notify(ctx, "textDocument/publishDiagnostics", params); err != nil {
+		log.Printf("Failed to publish diagnostics: %v", err)
+		return err
+	}
+	return nil
+}
+
+// GetDiagnostics generates diagnostics for a given file.
+// TODO: Implement actual diagnostic logic.
+func (s *Server) GetDiagnostics(filePath string) []lsp.Diagnostic {
+	// Placeholder: Return no diagnostics.
+	return []lsp.Diagnostic{}
+}
+
+// uriToFilePath converts a file URI to a local file path.
+func uriToFilePath(uri lsp.DocumentURI) (string, error) {
+	if !strings.HasPrefix(string(uri), "file://") {
+		return "", errors.New("unsupported URI scheme")
+	}
+	return strings.TrimPrefix(string(uri), "file://"), nil
+}
+
+// extractWord extracts the word at the given character position.
+func extractWord(line string, character int) (string, error) {
+	if character > len(line) {
+		return "", errors.New("character position out of range")
 	}
 
-	server := jrpc2.NewServer(handlers, nil)
+	// Find the start and end of the word at the given position.
+	start := character
+	for start > 0 && isWordChar(line[start-1]) {
+		start--
+	}
+	end := character
+	for end < len(line) && isWordChar(line[end]) {
+		end++
+	}
 
-	server.Start(channel.Header("")(os.Stdin, os.Stdout))
+	if start == end {
+		return "", errors.New("no word found at position")
+	}
 
-	if err := server.Wait(); err != nil {
+	return line[start:end], nil
+}
+
+// isWordChar checks if a byte is part of a word.
+func isWordChar(b byte) bool {
+	return ('a' <= b && b <= 'z') ||
+		('A' <= b && b <= 'Z') ||
+		('0' <= b && b <= '9') ||
+		b == '_'
+}
+
+func main() {
+	server := NewServer()
+	log.Println("Starting Language Server...")
+	if err := server.Start(); err != nil {
 		log.Fatalf("Server exited with error: %v", err)
 	}
 }
