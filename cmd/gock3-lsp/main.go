@@ -38,7 +38,9 @@ func NewServer() *Server {
 		"textDocument/hover":      handler.New(s.TextDocumentHover),
 	}
 
-	s.jrpcServer = jrpc2.NewServer(handlers, nil)
+	s.jrpcServer = jrpc2.NewServer(handlers, &jrpc2.ServerOptions{
+		AllowPush: true,
+	})
 	return s
 }
 
