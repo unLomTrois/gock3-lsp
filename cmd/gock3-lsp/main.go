@@ -44,7 +44,8 @@ func NewServer() *Server {
 
 // Initialize handles the LSP initialize request.
 func (s *Server) Initialize(ctx context.Context, params lsp.InitializeParams) (lsp.InitializeResult, error) {
-	// No shared resources are accessed here, so no mutex is needed.
+	log.Println("Initialize request received.")
+
 	capabilities := lsp.ServerCapabilities{
 		TextDocumentSync: &lsp.TextDocumentSyncOptionsOrKind{
 			Options: &lsp.TextDocumentSyncOptions{
@@ -59,6 +60,7 @@ func (s *Server) Initialize(ctx context.Context, params lsp.InitializeParams) (l
 		HoverProvider: true,
 	}
 
+	log.Println("Initialization complete. Server capabilities set.")
 	return lsp.InitializeResult{
 		Capabilities: capabilities,
 	}, nil
@@ -66,7 +68,9 @@ func (s *Server) Initialize(ctx context.Context, params lsp.InitializeParams) (l
 
 // TextDocumentCompletion provides completion items.
 func (s *Server) TextDocumentCompletion(ctx context.Context, params lsp.CompletionParams) (lsp.CompletionList, error) {
-	// No shared resources are accessed here, so no mutex is needed.
+	log.Printf("Completion request received for URI: %s at position Line %d, Character %d",
+		params.TextDocument.URI, params.Position.Line, params.Position.Character)
+
 	// Example completion item; extend as needed.
 	items := []lsp.CompletionItem{
 		{
@@ -77,6 +81,7 @@ func (s *Server) TextDocumentCompletion(ctx context.Context, params lsp.Completi
 		},
 	}
 
+	log.Printf("Returning %d completion items.", len(items))
 	return lsp.CompletionList{
 		IsIncomplete: false,
 		Items:        items,
@@ -91,19 +96,28 @@ func (s *Server) TextDocumentDidOpen(ctx context.Context, params lsp.DidOpenText
 	uri := params.TextDocument.URI
 	filePath, err := uriToFilePath(uri)
 	if err != nil {
-		log.Printf("Invalid URI '%s': %v", uri, err)
+		log.Printf("Invalid URI '%s' in DidOpen: %v", uri, err)
 		return err
 	}
 
+	log.Printf("Opening document: %s", filePath)
+
 	// Store the document content in memory.
 	s.Documents[filePath] = params.TextDocument.Text
+	log.Printf("Stored content for document: %s (Length: %d characters)", filePath, len(params.TextDocument.Text))
 
 	// Get diagnostics for the opened file.
 	diagnostics := s.GetDiagnostics(filePath)
 	s.DiagFiles[filePath] = diagnostics
+	log.Printf("Generated %d diagnostics for document: %s", len(diagnostics), filePath)
 
 	// Publish diagnostics to the client.
-	return s.publishDiagnostics(ctx, uri, diagnostics)
+	if err := s.publishDiagnostics(ctx, uri, diagnostics); err != nil {
+		log.Printf("Failed to publish diagnostics for document: %s", filePath)
+		return err
+	}
+	log.Printf("Published diagnostics for document: %s", filePath)
+	return nil
 }
 
 // TextDocumentDidChange handles the event when a text document is changed.
@@ -114,24 +128,36 @@ func (s *Server) TextDocumentDidChange(ctx context.Context, params lsp.DidChange
 	uri := params.TextDocument.URI
 	filePath, err := uriToFilePath(uri)
 	if err != nil {
-		log.Printf("Invalid URI '%s': %v", uri, err)
+		log.Printf("Invalid URI '%s' in DidChange: %v", uri, err)
 		return err
 	}
 
+	log.Printf("Changing document: %s", filePath)
+
 	// Apply changes to the document content in memory.
 	if len(params.ContentChanges) == 0 {
+		log.Printf("No content changes provided for document: %s", filePath)
 		return nil // No changes to apply.
 	}
 
 	change := params.ContentChanges[0]
+	previousLength := len(s.Documents[filePath])
 	s.Documents[filePath] = change.Text
+	newLength := len(change.Text)
+	log.Printf("Applied change to document: %s (Previous Length: %d, New Length: %d)", filePath, previousLength, newLength)
 
 	// Get updated diagnostics.
 	diagnostics := s.GetDiagnostics(filePath)
 	s.DiagFiles[filePath] = diagnostics
+	log.Printf("Generated %d updated diagnostics for document: %s", len(diagnostics), filePath)
 
 	// Publish updated diagnostics.
-	return s.publishDiagnostics(ctx, uri, diagnostics)
+	if err := s.publishDiagnostics(ctx, uri, diagnostics); err != nil {
+		log.Printf("Failed to publish updated diagnostics for document: %s", filePath)
+		return err
+	}
+	log.Printf("Published updated diagnostics for document: %s", filePath)
+	return nil
 }
 
 // TextDocumentDidClose handles the event when a text document is closed.
@@ -142,13 +168,16 @@ func (s *Server) TextDocumentDidClose(ctx context.Context, params lsp.DidCloseTe
 	uri := params.TextDocument.URI
 	filePath, err := uriToFilePath(uri)
 	if err != nil {
-		log.Printf("Invalid URI '%s': %v", uri, err)
+		log.Printf("Invalid URI '%s' in DidClose: %v", uri, err)
 		return err
 	}
+
+	log.Printf("Closing document: %s", filePath)
 
 	// Remove diagnostics and document content.
 	delete(s.DiagFiles, filePath)
 	delete(s.Documents, filePath)
+	log.Printf("Removed diagnostics and content for document: %s", filePath)
 
 	return nil
 }
@@ -161,9 +190,11 @@ func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentP
 	uri := params.TextDocument.URI
 	filePath, err := uriToFilePath(uri)
 	if err != nil {
-		log.Printf("Invalid URI '%s': %v", uri, err)
+		log.Printf("Invalid URI '%s' in Hover: %v", uri, err)
 		return lsp.Hover{}, err
 	}
+
+	log.Printf("Hover request for document: %s at Line %d, Character %d", uri, params.Position.Line, params.Position.Character)
 
 	content, exists := s.Documents[filePath]
 	if !exists {
@@ -175,6 +206,7 @@ func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentP
 	// Get the specific line.
 	lines := strings.Split(content, "\n")
 	if params.Position.Line >= len(lines) {
+		log.Printf("Hover position out of range in document: %s", filePath)
 		return lsp.Hover{}, nil // Line out of range.
 	}
 	lineContent := lines[params.Position.Line]
@@ -182,8 +214,11 @@ func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentP
 	// Extract the word at the given character position.
 	word, err := extractWord(lineContent, params.Position.Character)
 	if err != nil {
+		log.Printf("No word found at hover position in document: %s", filePath)
 		return lsp.Hover{}, nil // No word found.
 	}
+
+	log.Printf("Extracted word for hover: '%s' in document: %s", word, filePath)
 
 	// Example hover information; extend as needed.
 	hoverContent := "Information about: " + word
@@ -200,6 +235,8 @@ func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentP
 		},
 	}
 
+	log.Printf("Providing hover information for word: '%s' in document: %s", word, filePath)
+
 	return lsp.Hover{
 		Contents: []lsp.MarkedString{{
 			Language: "plaintext",
@@ -211,21 +248,25 @@ func (s *Server) TextDocumentHover(ctx context.Context, params lsp.TextDocumentP
 
 // Start runs the language server.
 func (s *Server) Start() error {
+	log.Println("Starting Language Server...")
 	s.jrpcServer.Start(channel.Header("")(os.Stdin, os.Stdout))
+	log.Println("Language Server started successfully.")
 	return s.jrpcServer.Wait()
 }
 
 // publishDiagnostics sends diagnostics to the client.
 func (s *Server) publishDiagnostics(ctx context.Context, uri lsp.DocumentURI, diagnostics []lsp.Diagnostic) error {
 	// No shared resources are accessed here, so no mutex is needed.
+	log.Printf("Publishing %d diagnostics for URI: %s", len(diagnostics), uri)
 	params := lsp.PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: diagnostics,
 	}
 	if err := s.jrpcServer.Notify(ctx, "textDocument/publishDiagnostics", params); err != nil {
-		log.Printf("Failed to publish diagnostics: %v", err)
+		log.Printf("Failed to publish diagnostics for URI: %s - Error: %v", uri, err)
 		return err
 	}
+	log.Printf("Diagnostics published successfully for URI: %s", uri)
 	return nil
 }
 
@@ -233,6 +274,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, uri lsp.DocumentURI, di
 // TODO: Implement actual diagnostic logic.
 func (s *Server) GetDiagnostics(filePath string) []lsp.Diagnostic {
 	// Placeholder: Return no diagnostics.
+	log.Printf("Generating diagnostics for document: %s (Placeholder implementation)", filePath)
 	return []lsp.Diagnostic{}
 }
 
@@ -241,7 +283,9 @@ func uriToFilePath(uri lsp.DocumentURI) (string, error) {
 	if !strings.HasPrefix(string(uri), "file://") {
 		return "", errors.New("unsupported URI scheme")
 	}
-	return strings.TrimPrefix(string(uri), "file://"), nil
+	filePath := strings.TrimPrefix(string(uri), "file://")
+	log.Printf("Converted URI '%s' to file path '%s'", uri, filePath)
+	return filePath, nil
 }
 
 // extractWord extracts the word at the given character position.
@@ -276,8 +320,11 @@ func isWordChar(b byte) bool {
 }
 
 func main() {
+	// Set up logging to include date and time.
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	server := NewServer()
-	log.Println("Starting Language Server...")
+	log.Println("Initializing Language Server...")
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server exited with error: %v", err)
 	}
