@@ -116,7 +116,7 @@ func TextDocumentHover(ctx context.Context, vs lsp.TextDocumentPositionParams) (
 
 	return lsp.Hover{
 		Contents: []lsp.MarkedString{{
-			Language: "ck3",
+			Language: "plaintext",
 			Value:    strings.Join(characterContents, " "),
 		}},
 		Range: rang,
