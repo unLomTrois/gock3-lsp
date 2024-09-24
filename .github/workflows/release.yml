@@ -5,6 +5,17 @@ on:
     tags:
       - 'v*.*.*'  # Trigger on version tags like v1.0.0
   workflow_dispatch:  # Allow manual triggering
+    inputs:
+      bump_type:
+        description: 'Select the version bump type: major, minor, patch, or none.'
+        required: true
+        default: 'minor'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+          - none
 
 jobs:
   build-and-release:
@@ -40,14 +51,17 @@ jobs:
       - name: Build binaries for all platforms
         run: make build-all
 
+      # Step 6: Bump version and push tag (only when manually triggered)
       - name: Bump version and push tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         id: bump
-        uses: anothrNick/github-tag-action@v1 # Don't use @master or @v1 unless you're happy to test the latest version
+        uses: anothrNick/github-tag-action@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # if you don't want to set write permissions use a PAT token
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: ${{ github.event.inputs.bump_type }}
           WITH_V: false
 
-      # Step 6: Upload release assets using softprops/action-gh-release
+      # Step 7: Upload release assets
       - name: Upload Release
         uses: softprops/action-gh-release@v2
         with:
@@ -55,4 +69,4 @@ jobs:
             ./bin/gock3-lsp-linux
             ./bin/gock3-lsp-darwin
             ./bin/gock3-lsp-windows.exe
-          tag_name: ${{ steps.bump.outputs.new_tag }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && steps.bump.outputs.new_tag || github.ref_name }}
