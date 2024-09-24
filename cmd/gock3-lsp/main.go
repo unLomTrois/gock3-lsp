@@ -62,7 +62,8 @@ func TextDocumentDidOpen(ctx context.Context, vs lsp.DidOpenTextDocumentParams) 
 }
 
 func TextDocumentPublishDiagnostics(server *jrpc2.Server, ctx context.Context, vs lsp.PublishDiagnosticsParams) error {
-	return server.Notify(ctx, "textDocument/publishDiagnostics", vs)
+	return nil
+	// return server.Notify(ctx, "textDocument/publishDiagnostics", vs)
 }
 
 func GetDiagnostics(fileURL string, file string) []lsp.Diagnostic {
